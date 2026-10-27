@@ -1,0 +1,48 @@
+-- Run this entire script in Supabase Dashboard > SQL Editor.
+create table if not exists public.recipes (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  category text not null default '기타',
+  time_minutes integer not null default 20,
+  servings integer not null default 2,
+  difficulty text not null default '쉬움',
+  description text not null default '',
+  image_url text not null default '',
+  ingredients jsonb not null default '[]'::jsonb,
+  steps jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.recipes enable row level security;
+-- Anyone can read public recipes; only the configured administrator email can mutate rows.
+-- IMPORTANT: replace admin@example.com below with your own administrator email BEFORE running this script.
+drop policy if exists "Public can read recipes" on public.recipes;
+create policy "Public can read recipes" on public.recipes for select using (true);
+drop policy if exists "Authenticated users can insert recipes" on public.recipes;
+create policy "Authenticated users can insert recipes" on public.recipes for insert to authenticated with check ((auth.jwt() ->> 'email') = 'admin@example.com');
+drop policy if exists "Authenticated users can update recipes" on public.recipes;
+create policy "Authenticated users can update recipes" on public.recipes for update to authenticated using ((auth.jwt() ->> 'email') = 'admin@example.com') with check ((auth.jwt() ->> 'email') = 'admin@example.com');
+drop policy if exists "Authenticated users can delete recipes" on public.recipes;
+create policy "Authenticated users can delete recipes" on public.recipes for delete to authenticated using ((auth.jwt() ->> 'email') = 'admin@example.com');
+
+-- Enable Realtime updates for recipe changes.
+alter table public.recipes replica identity full;
+do $$ begin
+  alter publication supabase_realtime add table public.recipes;
+exception when duplicate_object then null;
+when undefined_object then raise notice 'If publication supabase_realtime is missing, enable Realtime for recipes in the dashboard.';
+end $$;
+
+-- Public image bucket; only signed-in users can upload.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('recipe-photos', 'recipe-photos', true, 5242880, array['image/jpeg','image/png','image/webp'])
+on conflict (id) do update set public = true;
+drop policy if exists "Public can view recipe photos" on storage.objects;
+create policy "Public can view recipe photos" on storage.objects for select using (bucket_id = 'recipe-photos');
+drop policy if exists "Authenticated users can upload recipe photos" on storage.objects;
+create policy "Authenticated users can upload recipe photos" on storage.objects for insert to authenticated with check (bucket_id = 'recipe-photos' and (auth.jwt() ->> 'email') = 'admin@example.com');
+drop policy if exists "Authenticated users can update recipe photos" on storage.objects;
+create policy "Authenticated users can update recipe photos" on storage.objects for update to authenticated using (bucket_id = 'recipe-photos' and (auth.jwt() ->> 'email') = 'admin@example.com') with check (bucket_id = 'recipe-photos' and (auth.jwt() ->> 'email') = 'admin@example.com');
+drop policy if exists "Authenticated users can delete recipe photos" on storage.objects;
+create policy "Authenticated users can delete recipe photos" on storage.objects for delete to authenticated using (bucket_id = 'recipe-photos' and (auth.jwt() ->> 'email') = 'admin@example.com');
